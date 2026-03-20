@@ -132,12 +132,12 @@ function App() {
 
       const h2hAvgStr = h2hAvg.toFixed(3).replace(/^0/, '');
 
-      // Build stats summary string that's mathematically transparent
+      // Build stats summary string with slashes for clarity
       const bbPart = h2hBB > 0 ? `${h2hBB}四球` : '';
       const soPart = h2hSO > 0 ? `${h2hSO}三振` : '';
-      let statsSummary = `${h2hAB}打席${h2hHits}安打`;
-      if (h2hHR > 0) statsSummary += `${h2hHR}本塁打`;
-      if (h2hBB > 0) statsSummary += `${h2hBB}四球`;
+      let statsSummary = `${h2hAB}打席 / ${h2hHits}安打`;
+      if (h2hHR > 0) statsSummary += ` / ${h2hHR}本塁打`;
+      if (h2hBB > 0) statsSummary += ` / ${h2hBB}四球`;
 
       // Analytical and data-focused phrases (30-40 chars)
       if (type === 'pitcher-adv') {
