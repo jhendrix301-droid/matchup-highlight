@@ -210,6 +210,16 @@ select {
   gap: 0.75rem;
 }
 
+@media (max-width: 768px) {
+  .select-controls {
+    flex-direction: column;
+    width: 100%;
+  }
+  .custom-select {
+    width: 100%;
+  }
+}
+
 .custom-select {
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.1);
