@@ -1,451 +1,416 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronDown, Zap, Activity } from 'lucide-react';
-import { teams, pitcherRoster, batterRoster } from './mockData';
-import { calculateAdvancedMatchup } from './matchupAnalysis';
+import { RefreshCw, Radio, TrendingUp, Database } from 'lucide-react';
+import GameCard from './components/GameCard';
+import StandingsPanel from './components/StandingsPanel';
+import StatsRankings from './components/StatsRankings';
+import AudioSummary from './components/AudioSummary';
 import './index.css';
 
-function App() {
-  const [pitcherTeam, setPitcherTeam] = useState('F');
-  const [pitcherNum, setPitcherNum] = useState('14'); // 加藤
+const POLL_INTERVAL_MS = 30 * 1000; // 30秒ごとに更新
 
-  const [batterTeam, setBatterTeam] = useState('F');
-  const [batterNum, setBatterNum] = useState('66'); // 万波
+// 日付文字列を返す (YYYY-MM-DD)
+function formatDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
 
-  const [isLoading, setIsLoading] = useState(false);
-  const [currentMatchup, setCurrentMatchup] = useState(null);
+// 表示日を決定: 8時前なら昨日をデフォルト、8時以降なら今日
+function getDefaultDate() {
+  const now = new Date();
+  if (now.getHours() < 8) {
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    return formatDate(yesterday);
+  }
+  return formatDate(now);
+}
 
-  // Initialize with the first player
+function getTodayStr() {
+  return formatDate(new Date());
+}
+
+function getYesterdayStr() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return formatDate(d);
+}
+
+const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土'];
+
+// 日付ラベル（title と date の2行分を返す）
+function getDateLabel(dateStr) {
+  const today = getTodayStr();
+  const yesterday = getYesterdayStr();
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dow = WEEKDAY_LABELS[new Date(y, m - 1, d).getDay()];
+  const dateText = `${m}/${d}(${dow})`;
+  if (dateStr === today)     return { title: '今日の試合', date: dateText };
+  if (dateStr === yesterday) return { title: '昨日の試合', date: dateText };
+  return { title: dateText, date: '' };
+}
+
+// ===== DEV: ダミーデータ（表示確認用） =====
+const DUMMY_GAME = {
+  gameId: 'dummy-001',
+  homeTeam: '巨人',
+  awayTeam: 'DeNA',
+  homeScore: 2,
+  awayScore: 4,
+  status: 'live',   // 'pre' | 'live' | 'final' に切り替えて確認
+  inning: '7回表',
+  homeStartingPitcher: '菅野',
+  awayStartingPitcher: '東',
+  currentPitcher: '菅野',
+  currentBatter: '牧',
+  // ホーム（巨人）打線
+  lineupHome: [
+    { order: 1, pos: '中', name: '丸佳浩',   lastName: '丸',   bat: '左', avg: '.312' },
+    { order: 2, pos: '二', name: '吉川尚輝', lastName: '吉川', bat: '左', avg: '.278' },
+    { order: 3, pos: '右', name: '岡本和真', lastName: '岡本', bat: '右', avg: '.341' },
+    { order: 4, pos: '一', name: '中田翔',   lastName: '中田', bat: '右', avg: '.095' },
+    { order: 5, pos: '左', name: 'ウォーカー', lastName: 'ウォーカー', bat: '右', avg: '.288' },
+    { order: 6, pos: '捕', name: '大城卓三', lastName: '大城', bat: '右', avg: '.241' },
+    { order: 7, pos: '遊', name: '門脇誠',   lastName: '門脇', bat: '右', avg: '.197' },
+    { order: 8, pos: '三', name: '坂本勇人', lastName: '坂本', bat: '右', avg: '.156' },
+    { order: 9, pos: '投', name: '菅野智之', lastName: '菅野', bat: '右', avg: '-'   },
+  ],
+  // アウェイ（DeNA）打線
+  lineupAway: [
+    { order: 1, pos: '遊', name: '林琢真',   lastName: '林',   bat: '右', avg: '.265' },
+    { order: 2, pos: '二', name: '牧秀悟',   lastName: '牧',   bat: '右', avg: '.334' },
+    { order: 3, pos: '左', name: 'オースティン', lastName: 'オースティン', bat: '右', avg: '.357' },
+    { order: 4, pos: '一', name: '宮﨑敏郎', lastName: '宮﨑', bat: '右', avg: '.299' },
+    { order: 5, pos: '右', name: '佐野恵太', lastName: '佐野', bat: '左', avg: '.143' },
+    { order: 6, pos: '捕', name: '山本祐大', lastName: '山本', bat: '右', avg: '.223' },
+    { order: 7, pos: '中', name: '桑原将志', lastName: '桑原', bat: '右', avg: '.188' },
+    { order: 8, pos: '三', name: '京田陽太', lastName: '京田', bat: '左', avg: '.072' },
+    { order: 9, pos: '投', name: '東克樹',   lastName: '東',   bat: '左', avg: '-'   },
+  ],
+  // ホーム（巨人）ベンチ
+  benchHome: [
+    { name: '増田陸',   lastName: '増田', bat: '右', avg: '.321' },
+    { name: '北村拓己', lastName: '北村', bat: '左', avg: '.250' },
+    { name: '湯浅大',   lastName: '湯浅', bat: '右', avg: '.180' },
+    { name: '重信慎之介', lastName: '重信', bat: '左', avg: '.133' },
+  ],
+  // アウェイ（DeNA）ベンチ
+  benchAway: [
+    { name: '関根大気', lastName: '関根', bat: '左', avg: '.308' },
+    { name: '楠本泰史', lastName: '楠本', bat: '左', avg: '.267' },
+    { name: '蝦名達夫', lastName: '蝦名', bat: '右', avg: '.189' },
+    { name: 'ソト',     lastName: 'ソト', bat: '右', avg: '.412' },
+  ],
+};
+// ============================================
+
+const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
+
+export default function App() {
+  const [viewDate, setViewDate] = useState(getDefaultDate);
+  const [games, setGames] = useState([]);
+  const [standings, setStandings] = useState({});
+  const [central, setCentral] = useState({});
+  const [pacific, setPacific] = useState({});
+  const [rankings, setRankings] = useState(null);
+  const [rankingsLoading, setRankingsLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [now, setNow] = useState(new Date());
+
+  // 1秒ごとにクロック更新
   useEffect(() => {
-    handleGenerate();
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
   }, []);
 
-  const handleGenerate = async () => {
-    if (!pitcherTeam || !pitcherNum || !batterTeam || !batterNum) return;
+  // 日付切り替え用
+  const today = getTodayStr();
+  const yesterday = getYesterdayStr();
+  const isViewingToday = viewDate === today;
+  const isViewingYesterday = viewDate === yesterday;
 
-    setIsLoading(true);
+  // ========== 全試合データ取得 ==========
+  const fetchAllGames = useCallback(async (date) => {
+    const targetDate = date || viewDate;
+    try {
+      // 1. スケジュール + 順位表を並行取得
+      const [schedRes, standRes] = await Promise.allSettled([
+        fetch(`/api/schedule?date=${targetDate}`).then(r => r.json()),
+        fetch('/api/standings').then(r => r.json()),
+      ]);
 
-    const pitcherList = pitcherRoster[pitcherTeam] || [];
-    const pObj = pitcherList.find(p => p.number === pitcherNum);
-    const pitcherNameFull = pObj ? pObj.name : '投手';
-    const pitcherName = pitcherNameFull.split(' ')[0] || pitcherNameFull;
+      if (schedRes.status !== 'fulfilled') throw new Error('schedule API error');
+      const schedData = schedRes.value;
 
-    const batterList = batterRoster[batterTeam] || [];
-    const bObj = batterList.find(b => b.number === batterNum);
-    const batterNameFull = bObj ? bObj.name : '打者';
-    const batterName = batterNameFull.split(' ')[0] || batterNameFull;
+      if (standRes.status === 'fulfilled' && standRes.value.standings) {
+        setStandings(standRes.value.standings);
+        setCentral(standRes.value.central || {});
+        setPacific(standRes.value.pacific || {});
+      }
 
-    // Get team API IDs
-    const pTeamObj = teams.find(t => t.id === pitcherTeam);
-    const bTeamObj = teams.find(t => t.id === batterTeam);
-    const pitcherApiTeamId = pTeamObj?.apiTeamId;
-    const batterApiTeamId = bTeamObj?.apiTeamId;
-    const pitcherApiId = pObj?.apiId;
-    const batterApiId = bObj?.apiId;
+      const todayGames = schedData.games || [];
+      if (todayGames.length === 0) {
+        setGames([]);
+        setLoading(false);
+        return;
+      }
 
-    // ===== Try fetching head-to-head data =====
-    let h2h = null;
-    if (pitcherApiTeamId && batterApiTeamId && pitcherApiId && batterApiId) {
-      try {
-        const res = await fetch(
-          `/baseball/api/matchResultSearch?pitcherTeamId=${pitcherApiTeamId}&batterTeamId=${batterApiTeamId}&pitcherId=${pitcherApiId}&batterId=${batterApiId}&selectedYear=通算`
+      // 2. 各試合の詳細を並行取得（最大6試合）
+      const targetGames = todayGames.slice(0, 6);
+      const detailResults = await Promise.allSettled(
+        targetGames.map(g =>
+          fetch(`/api/game-detail?id=${g.gameId}`)
+            .then(r => r.json())
+            .catch(() => null)
+        )
+      );
+
+      const enriched = targetGames.map((g, i) => {
+        const detail = detailResults[i].status === 'fulfilled' ? detailResults[i].value : null;
+        if (!detail) return g;
+        const filtered = Object.fromEntries(
+          Object.entries(detail).filter(([, v]) => v !== '' && v !== null && v !== undefined)
         );
-        const json = await res.json();
-        if (json.data?.matchResult?.length > 0) {
-          h2h = json.data.matchResult[0];
-        }
-      } catch (e) {
-        console.warn('H2H API call failed:', e.message);
-      }
-    }
-
-    // Helper to generate deterministic pseudo-recent stats based on names
-    const getRecentForm = (pName, bName, pEra, bAvg) => {
-      let hash = 0;
-      const str = pName + bName;
-      for (let i = 0; i < str.length; i++) hash = ((hash << 5) - hash) + str.charCodeAt(i);
-      const seed = Math.abs(hash);
-      const rnd1 = (Math.sin(seed) * 10000) % 1;
-      const rnd2 = (Math.sin(seed + 1) * 10000) % 1;
-      
-      const formScore = ((rnd1 + 1) % 1) * 100; // 0-100
-      
-      // Pitcher recent (Last 3 games) ERA
-      const baseEra = pEra !== null ? pEra : 3.50;
-      let recentEra = baseEra;
-      if (formScore > 80) recentEra = Math.max(0.00, baseEra - 2.00);
-      else if (formScore > 60) recentEra = Math.max(0.50, baseEra - 1.00);
-      else if (formScore < 30) recentEra = baseEra + 2.50;
-      else if (formScore < 50) recentEra = baseEra + 1.00;
-
-      // Batter recent (Last 10 games) AVG
-      const baseAvg = bAvg !== null ? bAvg : 0.250;
-      let recentAvg = baseAvg;
-      let recentHits = 2; // out of 10
-      if (formScore > 80) { recentAvg = Math.min(0.500, baseAvg + 0.150); recentHits = 4; }
-      else if (formScore > 60) { recentAvg = Math.min(0.400, baseAvg + 0.080); recentHits = 3; }
-      else if (formScore < 30) { recentAvg = Math.max(0.050, baseAvg - 0.150); recentHits = 0; }
-      else if (formScore < 50) { recentAvg = Math.max(0.150, baseAvg - 0.050); recentHits = 1; }
-
-      return {
-        pRecentEra: recentEra.toFixed(2),
-        bRecentAvg: recentAvg.toFixed(3).replace(/^0/, ''),
-        bRecentHits: recentHits
-      };
-    };
-
-    // ===== Season stats as fallback =====
-    const era = pObj?.era && pObj.era !== '-' ? parseFloat(pObj.era) : null;
-    const kRate = pObj?.kRate && pObj.kRate !== '-' ? parseFloat(pObj.kRate) : null;
-    const whip = pObj?.whip && pObj.whip !== '-' ? parseFloat(pObj.whip) : null;
-    const pGames = pObj?.games ? parseInt(pObj.games) : 0;
-    const pThrow = pObj?.throw || 1; // 1=Right, 2=Left
-
-    const avg = bObj?.avg && bObj.avg !== '-' ? parseFloat(bObj.avg) : null;
-    const ops = bObj?.ops && bObj.ops !== '-' ? parseFloat(bObj.ops) : null;
-    const hr = bObj?.hr ? parseInt(bObj.hr) : 0;
-    const bGames = bObj?.games ? parseInt(bObj.games) : 0;
-    const bBat = bObj?.bat || 1; // 1=Right, 2=Left, 3=Both
-
-    // ===== Scoring =====
-    let adv, type, generatedPhrase, newStats;
-
-    if (h2h && h2h.atBatNumber >= 1) {
-      // ===== PRIMARY: Head-to-head data =====
-      const h2hAvg = h2h.battingAverage;
-      const h2hAB = h2h.atBatNumber;
-      const h2hHits = h2h.hitNumber;
-      const h2hHR = h2h.homeRun;
-      const h2hSO = h2h.strikeoutsNumber;
-      const h2hBB = h2h.fourBallNumber;
-      const h2hOPS = h2h.ops;
-
-      // Use the Advanced Analysis Engine (Lightweight Version)
-      const analysis = calculateAdvancedMatchup(
-        pitcherName, batterName, pThrow, bBat,
-        h2hAvg, h2hAB, h2hHits, h2hHR, h2hSO, h2hBB, h2hOPS,
-        false // isNoData
-      );
-
-      adv = analysis.pitcherAdvPercentage;
-      type = adv >= 55 ? 'pitcher-adv' : adv <= 45 ? 'batter-adv' : 'neutral-adv';
-
-      const h2hAvgStr = h2hAvg.toFixed(3).replace(/^0/, '');
-
-      // Build stats summary string with slashes for clarity
-      const bbPart = h2hBB > 0 ? `${h2hBB}四球` : '';
-      const soPart = h2hSO > 0 ? `${h2hSO}三振` : '';
-      let statsSummary = `${h2hAB}打席 / ${h2hHits}安打`;
-      if (h2hHR > 0) statsSummary += ` / ${h2hHR}本塁打`;
-      if (h2hBB > 0) statsSummary += ` / ${h2hBB}四球`;
-
-      // Analytical and data-focused phrases (30-40 chars)
-      if (type === 'pitcher-adv') {
-        const phrases = [
-          `通算${statsSummary}。対戦打率${h2hAvgStr}と${pitcherName}が指標面で明確に優位。`,
-          `過去のデータは${pitcherName}に軍配。打率${h2hAvgStr}と${batterName}を完璧に封じ込めている。`,
-          `対戦打率${h2hAvgStr}、${soPart ? soPart + 'の' : '確かな'}実績。${pitcherName}の優勢がデータに表れている。`
-        ];
-        generatedPhrase = phrases[Math.floor(Math.random() * phrases.length)];
-      } else if (type === 'batter-adv') {
-        const phrases = [
-          `対戦打率${h2hAvgStr}、通算${statsSummary}。指標の良さから${batterName}がやや優勢。`,
-          `過去データは${batterName}がリード。${h2hHR > 0 ? h2hHR + '本塁打の長打力' : '高い対応力'}が数字に表れる。`,
-          `通算${statsSummary}の好相性。対戦打率${h2hAvgStr}に基づく${batterName}の強みが見える。`
-        ];
-        generatedPhrase = phrases[Math.floor(Math.random() * phrases.length)];
-      } else {
-        const phrases = [
-          `通算${statsSummary}で打率${h2hAvgStr}。過去の傾向からは両者互角のデータが並ぶ。`,
-          `対戦打率${h2hAvgStr}、${soPart ? soPart + 'の' : ''}伯仲した成績。総合データから優劣はつけ難い。`,
-          `通算${statsSummary}が示す通り両者の力は拮抗。指標からは勝負の行方が読めないカード。`
-        ];
-        generatedPhrase = phrases[Math.floor(Math.random() * phrases.length)];
-      }
-
-      newStats = [
-        { label: '対戦打率', value: h2hAvgStr },
-        { label: '対戦成績', value: statsSummary },
-        { label: '対戦 三振/四球', value: `${h2hSO}三振 / ${h2hBB}四球` },
-      ];
-
-      setCurrentMatchup({
-        type,
-        pitcher: pitcherName,
-        batter: batterName,
-        phrase: generatedPhrase,
-        advantage: adv,
-        stats: newStats,
-        analysisResult: analysis
+        return { ...g, ...filtered };
       });
-      setIsLoading(false);
 
-    } else {
-      // ===== FALLBACK: Season stats =====
-      const analysis = calculateAdvancedMatchup(
-        pitcherName, batterName, pThrow, bBat,
-        null, 0, 0, 0, 0, 0, null,
-        true // isNoData
-      );
-
-      adv = analysis.pitcherAdvPercentage;
-      type = adv >= 55 ? 'pitcher-adv' : adv <= 45 ? 'batter-adv' : 'neutral-adv';
-
-      const eraStr = era !== null ? era.toFixed(2) : '-';
-      const kRateStr = kRate !== null ? kRate.toFixed(1) : '-';
-      const opsStr = ops !== null ? ops.toFixed(3).replace(/^0/, '') : '-';
-
-      const recentStats = getRecentForm(pitcherName, batterName, era, avg);
-
-      // Analytical first-matchup phrases focusing on recent form (30-40 chars)
-      const phrases = [
-        `初対戦。直近防御率${recentStats.pRecentEra}の${pitcherName}と、10戦${recentStats.bRecentHits}安打の${batterName}が激突。`,
-        `過去対戦なし。直近打率${recentStats.bRecentAvg}の${batterName}が、${pitcherName}の投球術にどう対応するか。`,
-        `初顔合わせ。直近防御率${recentStats.pRecentEra}の${pitcherName}に対し、${batterName}のアプローチに注目。`
-      ];
-      generatedPhrase = phrases[Math.floor(Math.random() * phrases.length)];
-
-      newStats = [
-        { label: `${pitcherName} 直近3登板防御率`, value: recentStats.pRecentEra },
-        { label: `${batterName} 直近10試合打率`, value: recentStats.bRecentAvg },
-        { label: type === 'pitcher-adv' ? `${pitcherName} 奪三振率` : `${batterName} OPS`, value: type === 'pitcher-adv' ? kRateStr : opsStr },
-      ];
-
-      setCurrentMatchup({
-        type,
-        pitcher: pitcherName,
-        batter: batterName,
-        phrase: generatedPhrase,
-        advantage: adv,
-        stats: newStats,
-        analysisResult: analysis
-      });
-      setIsLoading(false);
+      setGames(enriched);
+      setLastUpdated(new Date());
+      setError(null);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
     }
+  }, [viewDate]);
+
+  // 個人成績ランキング取得（初回のみ、5分キャッシュ）
+  const fetchRankings = useCallback(async () => {
+    setRankingsLoading(true);
+    try {
+      const res = await fetch('/api/stats-rankings', { cache: 'no-cache' }).then(r => r.json());
+      if (res.rankings) setRankings(res.rankings);
+    } catch (e) {
+      console.warn('rankings fetch failed:', e.message);
+    } finally {
+      setRankingsLoading(false);
+    }
+  }, []);
+
+  // 初回 + ポーリング
+  useEffect(() => {
+    fetchAllGames();
+    fetchRankings();
+    // 今日の試合を見ている時のみポーリング
+    const timer = isViewingToday
+      ? setInterval(() => fetchAllGames(), POLL_INTERVAL_MS)
+      : null;
+    const rankTimer = setInterval(fetchRankings, 5 * 60 * 1000);
+    return () => { if (timer) clearInterval(timer); clearInterval(rankTimer); };
+  }, [fetchAllGames, fetchRankings, viewDate]);
+
+  // 手動更新
+  const handleRefresh = () => {
+    setLoading(true);
+    fetchAllGames();
   };
 
-  // Helper to colorize specific words in the phrase
-  const renderPhrase = (phrase, pName, bName) => {
-    if (!phrase) return null;
-
-    // Dynamically create highlighting targets based on names
-    let result = phrase;
-
-    // Highlight pitcher
-    if (pName && result.includes(pName)) {
-      result = result.replace(new RegExp(pName, 'g'), `<span class="highlight-pitcher">${pName}</span>`);
-    }
-
-    // Highlight batter
-    if (bName && result.includes(bName)) {
-      result = result.replace(new RegExp(bName, 'g'), `<span class="highlight-batter">${bName}</span>`);
-    }
-
-    // Highlight some hot words
-    const hotWords = ['.380！', '奪三振率', '四球3つ'];
-    hotWords.forEach(kw => {
-      if (result.includes(kw)) {
-        result = result.replace(kw, `<span class="highlight-gold">${kw}</span>`);
-      }
-    });
-
-    return <span dangerouslySetInnerHTML={{ __html: result }} />;
+  // 日付切り替え
+  const handleDateSwitch = (date) => {
+    if (date === viewDate) return;
+    setViewDate(date);
+    setGames([]);
+    setLoading(true);
   };
 
-  const advClass = currentMatchup ? currentMatchup.type : 'neutral-adv';
+  // ticker items from game data
+  const tickerItems = games.length > 0
+    ? games.flatMap(g => {
+        const items = [`${g.awayTeam} vs ${g.homeTeam}`];
+        if (g.status === 'live' && g.awayScore != null)
+          items.push(`${g.awayTeam} ${g.awayScore} - ${g.homeScore} ${g.homeTeam} [${g.inning || 'LIVE'}]`);
+        if (g.awayStartingPitcher || g.homeStartingPitcher)
+          items.push(`先発: ${g.awayStartingPitcher || '未定'} / ${g.homeStartingPitcher || '未定'}`);
+        return items;
+      })
+    : ['NPB TODAY', 'MATCHUP ANALYSIS', 'REAL-TIME DATA', 'PITCHER VS BATTER'];
+
+  const liveCount  = games.filter(g => g.status === 'live').length;
+  const preCount   = games.filter(g => g.status === 'pre').length;
+  const finalCount = games.filter(g => g.status === 'final').length;
 
   return (
-    <div className="app-wrapper">
-      <header className="app-header container">
-        <div className="logo-text">MATCHUP HIGH</div>
-        <div className="user-icon">
-          <Activity size={20} color="var(--text-secondary)" />
+    <div className="v2-app">
+      {/* 光の玉（コメット） */}
+      <div className="v2-orb v2-orb--1" aria-hidden="true" />
+      <div className="v2-orb v2-orb--2" aria-hidden="true" />
+      <div className="v2-orb v2-orb--3" aria-hidden="true" />
+      <div className="v2-orb v2-orb--4" aria-hidden="true" />
+      <div className="v2-orb v2-orb--5" aria-hidden="true" />
+      <div className="v2-orb v2-orb--6" aria-hidden="true" />
+      <div className="v2-orb v2-orb--7" aria-hidden="true" />
+      <div className="v2-orb v2-orb--8" aria-hidden="true" />
+      <div className="v2-orb v2-orb--9" aria-hidden="true" />
+      <div className="v2-orb v2-orb--10" aria-hidden="true" />
+      <div className="v2-orb v2-orb--11" aria-hidden="true" />
+      <div className="v2-orb v2-orb--12" aria-hidden="true" />
+      {/* ヘッダー */}
+      <header className="v2-header">
+        <div className="v2-header-inner">
+          <div className="v2-logo">
+            <span className="v2-logo-main">MATCHUP HIGH</span>
+            <span className="v2-logo-version">V2</span>
+          </div>
+          <div className="v2-header-right">
+            {/* live game count */}
+            {liveCount > 0 && (
+              <span className="v2-live-count">
+                <span className="v2-live-count-dot" />
+                LIVE {liveCount}
+              </span>
+            )}
+            {/* リアルタイムクロック */}
+            <div className="v2-clock">
+              <div className="v2-clock-date">
+                {now.getMonth() + 1}/{now.getDate()}({WEEKDAYS[now.getDay()]})
+              </div>
+              <div className="v2-clock-time">
+                {String(now.getHours()).padStart(2, '0')}:{String(now.getMinutes()).padStart(2, '0')}:{String(now.getSeconds()).padStart(2, '0')}
+              </div>
+            </div>
+            <button
+              className="v2-refresh-btn"
+              onClick={handleRefresh}
+              disabled={loading}
+              title="今すぐ更新"
+            >
+              <motion.div
+                animate={loading ? { rotate: 360 } : { rotate: 0 }}
+                transition={loading ? { repeat: Infinity, duration: 0.8, ease: 'linear' } : {}}
+              >
+                <RefreshCw size={20} />
+              </motion.div>
+            </button>
+          </div>
+        </div>
+        <div className="v2-header-subtitle">
+          <Database size={9} style={{marginRight:'0.3rem',verticalAlign:'middle'}} />
+          NPB {isViewingToday ? 'REAL-TIME' : 'RESULTS'} &nbsp;|&nbsp; {games.length} GAMES
+          {liveCount  > 0 && <> &nbsp;|&nbsp; <span style={{color:'#ef4444'}}>● LIVE {liveCount}</span></>}
+          {preCount   > 0 && <> &nbsp;|&nbsp; <span style={{color:'#f59e0b'}}>PRE {preCount}</span></>}
+          {finalCount > 0 && <> &nbsp;|&nbsp; <span style={{color:'#64748b'}}>FINAL {finalCount}</span></>}
         </div>
       </header>
 
-      <main className="main-content container">
-
-        {/* Selection Panel */}
-        <section className="selector-panel">
-
-          <div className="player-select-group pitcher">
-            <div className="select-label">PITCHER <Zap size={14} /></div>
-            <div className="select-controls">
-              <div className="custom-select-wrapper">
-                <select
-                  className="custom-select"
-                  value={pitcherTeam}
-                  onChange={(e) => setPitcherTeam(e.target.value)}
-                >
-                  <option value="">チーム</option>
-                  {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
-              </div>
-              <div className="custom-select-wrapper">
-                <select
-                  className="custom-select"
-                  value={pitcherNum}
-                  onChange={(e) => setPitcherNum(e.target.value)}
-                >
-                  <option value="">背番号</option>
-                  {(pitcherRoster[pitcherTeam] || []).map(p => (
-                    <option key={p.number} value={p.number}>#{p.number} {p.name}</option>
-                  ))}
-                  <option value="99">#99 その他</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          <div className="vs-badge">VS</div>
-
-          <div className="player-select-group batter">
-            <div className="select-label">BATTER <Zap size={14} /></div>
-            <div className="select-controls">
-              <div className="custom-select-wrapper">
-                <select
-                  className="custom-select"
-                  value={batterTeam}
-                  onChange={(e) => setBatterTeam(e.target.value)}
-                >
-                  <option value="">チーム</option>
-                  {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
-              </div>
-              <div className="custom-select-wrapper">
-                <select
-                  className="custom-select"
-                  value={batterNum}
-                  onChange={(e) => setBatterNum(e.target.value)}
-                >
-                  <option value="">背番号</option>
-                  {(batterRoster[batterTeam] || []).map(p => (
-                    <option key={p.number} value={p.number}>#{p.number} {p.name}</option>
-                  ))}
-                  <option value="99">#99 その他</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-        </section>
-
-        <button
-          className="generate-btn"
-          onClick={handleGenerate}
-          disabled={isLoading}
-        >
-          {isLoading ? (
-            <motion.div
-              animate={{ rotate: 360 }}
-              transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
-            >
-              <Activity size={20} />
-            </motion.div>
-          ) : (
-            <>ハイライトを生成</>
-          )}
-        </button>
-
-        {/* Stage Area */}
-        <section className={`stage-area`}>
-          <div className={`bg-fx ${advClass}`}></div>
-          <div className="bg-noise"></div>
-
-          <AnimatePresence mode="wait">
-            {!isLoading && currentMatchup && (
-              <motion.div
-                key={currentMatchup.phrase}
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                transition={{ duration: 0.5, type: 'spring' }}
-                className="concise-report-container"
-              >
-                {/* 1. 判定結果 */}
-                <div className="concise-header">
-                  <h2 className="section-title">【判定結果】</h2>
-                  <ul className="concise-list">
-                    <li>
-                      <strong>有利な選手:</strong> 
-                      <span className="winner-highlight"> {currentMatchup.analysisResult.favoredPlayer}</span>
-                    </li>
-                    <li>
-                      <strong>有利度スコア:</strong> 
-                      <span> {Math.max(currentMatchup.analysisResult.pitcherAdvPercentage, 100 - currentMatchup.analysisResult.pitcherAdvPercentage)}%</span>
-                    </li>
-                    <li>
-                      <strong>対戦期待値:</strong>
-                      <span> {currentMatchup.analysisResult.expectedResult}</span>
-                    </li>
-                  </ul>
-                </div>
-
-                {/* 2. 分析レポート */}
-                <div className="concise-body">
-                  <h2 className="section-title">【分析レポート】</h2>
-                  <div className="highlight-phrase-wrap">
-                    <h1 className="highlight-phrase">
-                      {renderPhrase(currentMatchup.phrase, currentMatchup.pitcher, currentMatchup.batter)}
-                    </h1>
-                  </div>
-
-                  {/* Advantage Gauge */}
-                  <div className="gauge-container concise-gauge">
-                    <div className="gauge-labels">
-                      <span className="gauge-label pitcher">
-                        Pitcher Adv
-                        {currentMatchup && <span className="gauge-value">{currentMatchup.advantage}%</span>}
-                      </span>
-                      <span className="gauge-label batter">
-                        {currentMatchup && <span className="gauge-value">{100 - currentMatchup.advantage}%</span>}
-                        Batter Adv
-                      </span>
-                    </div>
-                    <div className="gauge-track">
-                      <div className="gauge-marker"></div>
-                      {currentMatchup && (
-                        <motion.div
-                          className={`gauge-fill ${advClass}`}
-                          initial={{ width: '50%', right: 'auto', left: 0 }}
-                          animate={{
-                            width: advClass === 'pitcher-adv' ? `${currentMatchup.advantage}%` :
-                              advClass === 'batter-adv' ? `${100 - currentMatchup.advantage}%` : '50%',
-                            left: advClass === 'batter-adv' ? 'auto' : 0,
-                            right: advClass === 'batter-adv' ? 0 : 'auto',
-                          }}
-                          transition={{ duration: 1.5, ease: "easeOut" }}
-                        />
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </section>
-
-        {/* Supporting Data */}
-        <section className="data-cards-grid">
-          <AnimatePresence>
-            {!isLoading && currentMatchup && currentMatchup.stats.map((stat, idx) => (
-              <motion.div
-                key={stat.label + idx}
-                className="data-card"
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.2 + (idx * 0.1) }}
-              >
-                <div className="data-card-title">{stat.label}</div>
-                <div className="data-card-value">{stat.value}</div>
-              </motion.div>
+      {/* Ticker strip */}
+      {games.length > 0 && (
+        <div className="v2-ticker" aria-hidden="true">
+          <div className="v2-ticker-inner">
+            {[...tickerItems, ...tickerItems].map((item, i) => (
+              <span key={i} className="v2-ticker-item">
+                <TrendingUp size={9} style={{flexShrink:0}} />
+                {item}
+                <span className="v2-ticker-sep">◆</span>
+              </span>
             ))}
-          </AnimatePresence>
-        </section>
+          </div>
+        </div>
+      )}
 
+      {/* 日付切り替え + 音声サマリー（横並び） */}
+      <div className="v2-controls-bar">
+        <div className="v2-date-toggle">
+          {[yesterday, today].map((dateStr) => {
+            const isActive = viewDate === dateStr;
+            const { title, date } = getDateLabel(dateStr);
+            return (
+              <button
+                key={dateStr}
+                className={`v2-date-btn ${isActive ? 'v2-date-btn--active' : ''}`}
+                onClick={() => handleDateSwitch(dateStr)}
+              >
+                <span className="v2-date-btn-title">{title}</span>
+                {date && <span className="v2-date-btn-date">{date}</span>}
+              </button>
+            );
+          })}
+        </div>
+        <AudioSummary games={games} />
+      </div>
+
+      {/* メインコンテンツ */}
+      <main className="v2-main">
+        {/* ローディング */}
+        {loading && games.length === 0 && (
+          <div className="v2-loading">
+            INITIALIZING DATA FEED...
+          </div>
+        )}
+
+        {/* エラー */}
+        {error && (
+          <div className="v2-error">
+            <p>データの取得に失敗しました</p>
+            <p className="v2-error-detail">{error}</p>
+            <button className="v2-retry-btn" onClick={handleRefresh}>RETRY</button>
+          </div>
+        )}
+
+        {/* 試合なし */}
+        {!loading && !error && games.length === 0 && (
+          <div className="v2-no-games">
+            <p>本日は試合がありません</p>
+          </div>
+        )}
+
+        {/* 試合カードグリッド */}
+        <AnimatePresence>
+          {games.length > 0 && (
+            <motion.div
+              className="v2-games-grid"
+              initial="hidden"
+              animate="visible"
+              variants={{
+                hidden: {},
+                visible: { transition: { staggerChildren: 0.07 } }
+              }}
+            >
+              {games.map((game, i) => (
+                <motion.div
+                  key={game.gameId || i}
+                  style={{ height: '100%' }}
+                  variants={{
+                    hidden: { opacity: 0, y: 16 },
+                    visible: { opacity: 1, y: 0, transition: { duration: 0.35 } }
+                  }}
+                >
+                  <GameCard game={game} standings={standings} forceFinal={!isViewingToday} />
+                </motion.div>
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ポーリング表示 */}
+        {games.length > 0 && (
+          <div className="v2-poll-notice">
+            <Radio size={9} style={{marginRight:'0.3rem',verticalAlign:'middle'}} />
+            AUTO-REFRESH 30s &nbsp;|&nbsp; {games.length} FEEDS ACTIVE
+          </div>
+        )}
+
+        {/* 順位表 */}
+        <div className="v2-standings-area">
+          <StandingsPanel central={central} pacific={pacific} />
+        </div>
+
+        {/* 個人成績ランキング */}
+        <StatsRankings rankings={rankings} loading={rankingsLoading} />
       </main>
     </div>
   );
 }
-
-export default App;

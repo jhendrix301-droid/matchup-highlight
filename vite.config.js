@@ -10,6 +10,10 @@ export default defineConfig({
         target: 'https://baseball-pitcher-vs-batter.com',
         changeOrigin: true,
         secure: true,
+      },
+      '/api': {
+        target: 'http://localhost:3001',
+        changeOrigin: false,
       }
     }
   }

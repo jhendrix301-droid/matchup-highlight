@@ -4,9 +4,15 @@
       "source": "/baseball/api/(.*)",
       "destination": "https://baseball-pitcher-vs-batter.com/baseball/api/$1"
     },
-    {
+{
       "source": "/(.*)",
       "destination": "/index.html"
     }
-  ]
+  ],
+  "functions": {
+    "api/*.js": {
+      "memory": 512,
+      "maxDuration": 15
+    }
+  }
 }
